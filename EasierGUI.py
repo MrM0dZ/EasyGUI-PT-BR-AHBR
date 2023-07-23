@@ -22,10 +22,147 @@ warnings.filterwarnings("ignore")
 torch.manual_seed(114514)
 from i18n import I18nAuto
 import ffmpeg
-import tkinter as tk
+
+import math
+
 #from MDXNet import MDXNetDereverb
 
-i18n = I18nAuto(language="pt_BR")  # Forçando o uso do idioma "pt_BR"
+# Check if we're in a Google Colab environment
+if os.path.exists('/content/'):
+    print("\n-------------------------------\nRVC v2 Easy GUI (Colab Edition)\n-------------------------------\n")
+
+    print("-------------------------------")
+        # Check if the file exists at the specified path
+    if os.path.exists('/content/Retrieval-based-Voice-Conversion-WebUI/hubert_base.pt'):
+        # If the file exists, print a statement saying so
+        print("File /content/Retrieval-based-Voice-Conversion-WebUI/hubert_base.pt already exists. No need to download.")
+    else:
+        # If the file doesn't exist, print a statement saying it's downloading
+        print("File /content/Retrieval-based-Voice-Conversion-WebUI/hubert_base.pt does not exist. Starting download.")
+
+        # Make a request to the URL
+        response = requests.get('https://huggingface.co/lj1995/VoiceConversionWebUI/resolve/main/hubert_base.pt')
+
+        # Ensure the request was successful
+        if response.status_code == 200:
+            # If the response was a success, save the content to the specified file path
+            with open('/content/Retrieval-based-Voice-Conversion-WebUI/hubert_base.pt', 'wb') as f:
+                f.write(response.content)
+            print("Download complete. File saved to /content/Retrieval-based-Voice-Conversion-WebUI/hubert_base.pt.")
+        else:
+            # If the response was a failure, print an error message
+            print("Failed to download file. Status code: " + str(response.status_code) + ".")
+else:
+    print("\n-------------------------------\nRVC v2 Easy GUI (Local Edition))\n-------------------------------\n")
+    print("-------------------------------\nNot running on Google Colab, skipping download.")
+
+def formant_apply(qfrency, tmbre):
+    Quefrency = qfrency
+    Timbre = tmbre
+    DoFormant = True
+    
+    with open('formanting.txt', 'w') as fxxxf:
+        fxxxf.truncate(0)
+
+        fxxxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
+    return ({"value": Quefrency, "__type__": "update"}, {"value": Timbre, "__type__": "update"})
+
+def get_fshift_presets():
+    fshift_presets_list = []
+    for dirpath, dirnames, filenames in os.walk("./formantshiftcfg/"):
+        for filename in filenames:
+            if filename.endswith(".txt"):
+                fshift_presets_list.append(os.path.join(dirpath,filename).replace('\\','/'))
+                
+    if len(fshift_presets_list) > 0:
+        return fshift_presets_list
+    else:
+        return ''
+
+
+
+def formant_enabled(cbox, qfrency, tmbre, frmntapply, formantpreset, formant_refresh_button):
+    
+    if (cbox):
+
+        DoFormant = True
+        with open('formanting.txt', 'w') as fxxf:
+            fxxf.truncate(0)
+
+            fxxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
+        #print(f"is checked? - {cbox}\ngot {DoFormant}")
+        
+        return (
+            {"value": True, "__type__": "update"},
+            {"visible": True, "__type__": "update"},
+            {"visible": True, "__type__": "update"},
+            {"visible": True, "__type__": "update"},
+            {"visible": True, "__type__": "update"},
+            {"visible": True, "__type__": "update"},
+        )
+        
+        
+    else:
+        
+        DoFormant = False
+        with open('formanting.txt', 'w') as fxf:
+            fxf.truncate(0)
+
+            fxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
+        #print(f"is checked? - {cbox}\ngot {DoFormant}")
+        return (
+            {"value": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+            {"visible": False, "__type__": "update"},
+        )
+        
+
+
+def preset_apply(preset, qfer, tmbr):
+    if str(preset) != '':
+        with open(str(preset), 'r') as p:
+            content = p.readlines()
+            qfer, tmbr = content[0].split('\n')[0], content[1]
+            
+            formant_apply(qfer, tmbr)
+    else:
+        pass
+    return ({"value": qfer, "__type__": "update"}, {"value": tmbr, "__type__": "update"})
+
+def update_fshift_presets(preset, qfrency, tmbre):
+    
+    qfrency, tmbre = preset_apply(preset, qfrency, tmbre)
+    
+    if (str(preset) != ''):
+        with open(str(preset), 'r') as p:
+            content = p.readlines()
+            qfrency, tmbre = content[0].split('\n')[0], content[1]
+            
+            formant_apply(qfrency, tmbre)
+    else:
+        pass
+    return (
+        {"choices": get_fshift_presets(), "__type__": "update"},
+        {"value": qfrency, "__type__": "update"},
+        {"value": tmbre, "__type__": "update"},
+    )
+
+DoFormant = False
+
+with open('formanting.txt', 'r') as fvf:
+    content = fvf.readlines()
+    if 'True' in content[0]:
+        DoFormant = True
+    else:
+        DoFormant = False
+        pass
+    Quefrency, Timbre = content[1].split('\n')[0], content[2].split('\n')[0]
+
+i18n = I18nAuto()
 #i18n.print()
 # 判断是否有能用来训练和加速推理的N卡
 ngpu = torch.cuda.device_count()
@@ -150,7 +287,7 @@ def vc_single(
         return "You need to upload an audio", None
     f0_up_key = int(f0_up_key)
     try:
-        audio = load_audio(input_audio_path, 16000)
+        audio = load_audio(input_audio_path, 16000, DoFormant, Quefrency, Timbre)
         audio_max = np.abs(audio).max() / 0.95
         if audio_max > 1:
             audio /= audio_max
@@ -657,6 +794,23 @@ def change_f0(if_f0_3, sr2, version19):  # f0method8,pretrained_G14,pretrained_D
     )
 
 
+global log_interval
+
+
+def set_log_interval(exp_dir, batch_size12):
+    log_interval = 1
+
+    folder_path = os.path.join(exp_dir, "1_16k_wavs")
+
+    if os.path.exists(folder_path) and os.path.isdir(folder_path):
+        wav_files = [f for f in os.listdir(folder_path) if f.endswith(".wav")]
+        if wav_files:
+            sample_size = len(wav_files)
+            log_interval = math.ceil(sample_size / batch_size12)
+            if log_interval > 1:
+                log_interval += 1
+    return log_interval
+
 # but3.click(click_train,[exp_dir1,sr2,if_f0_3,save_epoch10,total_epoch11,batch_size12,if_save_latest13,pretrained_G14,pretrained_D15,gpus16])
 def click_train(
     exp_dir1,
@@ -683,6 +837,9 @@ def click_train(
         if version19 == "v1"
         else "%s/3_feature768" % (exp_dir)
     )
+    
+    log_interval = set_log_interval(exp_dir, batch_size12)
+    
     if if_f0_3:
         f0_dir = "%s/2a_f0" % (exp_dir)
         f0nsf_dir = "%s/2b-f0nsf" % (exp_dir)
@@ -751,7 +908,7 @@ def click_train(
     if gpus16:
         cmd = (
             config.python_cmd
-            + " train_nsf_sim_cache_sid_load_pretrain.py -e %s -sr %s -f0 %s -bs %s -g %s -te %s -se %s %s %s -l %s -c %s -sw %s -v %s"
+            + " train_nsf_sim_cache_sid_load_pretrain.py -e %s -sr %s -f0 %s -bs %s -g %s -te %s -se %s %s %s -l %s -c %s -sw %s -v %s -li %s"
             % (
                 exp_dir1,
                 sr2,
@@ -766,12 +923,13 @@ def click_train(
                 1 if if_cache_gpu17 == i18n("是") else 0,
                 1 if if_save_every_weights18 == i18n("是") else 0,
                 version19,
+                log_interval,
             )
         )
     else:
         cmd = (
             config.python_cmd
-            + " train_nsf_sim_cache_sid_load_pretrain.py -e %s -sr %s -f0 %s -bs %s -te %s -se %s %s %s -l %s -c %s -sw %s -v %s"
+            + " train_nsf_sim_cache_sid_load_pretrain.py -e %s -sr %s -f0 %s -bs %s -te %s -se %s %s %s -l %s -c %s -sw %s -v %s -li %s"
             % (
                 exp_dir1,
                 sr2,
@@ -785,6 +943,7 @@ def click_train(
                 1 if if_cache_gpu17 == i18n("是") else 0,
                 1 if if_save_every_weights18 == i18n("是") else 0,
                 version19,
+                log_interval,
             )
         )
     print(cmd)
@@ -1591,7 +1750,7 @@ def download_from_url(url, model):
 def success_message(face):
     return f'{face.name} has been uploaded.', 'None'
 def mouth(size, face, voice, faces):
-    if size == 'Half':
+    if size == i18n('Half'):
         size = 2
     else:
         size = 1
@@ -1733,13 +1892,13 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             )
                         dropbox.upload(fn=save_to_wav2, inputs=[dropbox], outputs=[input_audio0])
                         dropbox.upload(fn=change_choices2, inputs=[], outputs=[input_audio0])
-                        refresh_button2 = gr.Button(i18n("Refresh"), variant="primary", size='sm')
+                        refresh_button2 = gr.Button("Refresh", variant="primary", size='sm')
                         record_button.change(fn=save_to_wav, inputs=[record_button], outputs=[input_audio0])
                         record_button.change(fn=change_choices2, inputs=[], outputs=[input_audio0])
                     with gr.Row():
                         with gr.Accordion(i18n('Text To Speech'), open=False):
                             with gr.Column():
-                                lang = gr.Radio(label=i18n('Chinese & Japanese do not work with ElevenLabs currently.'),choices=['en','es','fr','pt','zh-CN','de','hi','ja'], value=i18n('en'))
+                                lang = gr.Radio(label=i18n('Chinese & Japanese do not work with ElevenLabs currently.'),choices=['en','es','fr','pt','zh-CN','de','hi','ja'], value='en')
                                 api_box = gr.Textbox(label=i18n("Enter your API Key for ElevenLabs, or leave empty to use GoogleTTS"), value='')
                                 elevenid=gr.Dropdown(label=i18n("Voice:"), choices=eleven_voices)
                             with gr.Column():
@@ -1749,7 +1908,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                     with gr.Row():
                         with gr.Accordion(i18n('Wav2Lip'), open=False):
                             with gr.Row():
-                                size = gr.Radio(label=i18n('Resolution:'),choices=[i18n("Half"), i18n("Full")])
+                                size = gr.Radio(label=i18n('Resolution:'),choices=[i18n('Half'),i18n('Full')])
                                 face = gr.UploadButton(i18n("Upload A Character"),type='file')
                                 faces = gr.Dropdown(label=i18n("OR Choose one:"), choices=['None','Ben Shapiro','Andrew Tate'])
                             with gr.Row():
@@ -1789,16 +1948,16 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                     animate_button.click(fn=mouth, inputs=[size, face, vc_output2, faces], outputs=[animation, preview])
                     with gr.Accordion(i18n("Advanced Settings"), open=False):
                         f0method0 = gr.Radio(
-                            label=i18n("Optional: Change the Pitch Extraction Algorithm."),
-                            choices=["pm", "dio", "mangio-crepe-tiny", "crepe-tiny", "crepe", "mangio-crepe", "harvest","rmvpe"], # Fork Feature. Add Crepe-Tiny
-                            value="mangio-crepe",
+                            label=i18n("Optional: Change the Pitch Extraction Algorithm.\nExtraction methods are sorted from 'worst quality' to 'best quality'.\nmangio-crepe may or may not be better than rmvpe in cases where 'smoothness' is more important, but rmvpe is the best overall."),
+                            choices=["pm", "dio", "crepe-tiny", "mangio-crepe-tiny", "crepe", "harvest", "mangio-crepe", "rmvpe"], # Fork Feature. Add Crepe-Tiny
+                            value="rmvpe",
                             interactive=True,
                         )
                         crepe_hop_length = gr.Slider(
                             minimum=1,
                             maximum=512,
                             step=1,
-                            label=i18n("Mangio-Crepe Hop Length. Higher numbers will reduce the chance of extreme pitch changes but lower numbers will increase accuracy."),
+                            label=i18n("Mangio-Crepe Hop Length. Higher numbers will reduce the chance of extreme pitch changes but lower numbers will increase accuracy. 64-192 is a good range to experiment with."),
                             value=120,
                             interactive=True
                             )
@@ -1834,6 +1993,48 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             step=0.01,
                             interactive=True,
                             )
+                        formanting = gr.Checkbox(
+                            value=False,
+                            label=i18n("[EXPERIMENTAL, WAV ONLY] Formant shift inference audio"),
+                            info=i18n("Used for male to female and vice-versa conversions"),
+                            interactive=True,
+                            visible=True,
+                        )
+                        
+                        formant_preset = gr.Dropdown(
+                            value='',
+                            choices=get_fshift_presets(),
+                            label=i18n("browse presets for formanting"),
+                            visible=False,
+                        )
+                        formant_refresh_button = gr.Button(value='\U0001f504', visible=False,variant='primary')
+                        #formant_refresh_button = ToolButton( elem_id='1')
+                        #create_refresh_button(formant_preset, lambda: {"choices": formant_preset}, "refresh_list_shiftpresets")
+                        
+                        qfrency = gr.Slider(
+                                value=Quefrency,
+                                label=i18n("Quefrency for formant shifting"),
+                                minimum=-16.0,
+                                maximum=16.0,
+                                step=0.1,
+                                visible=False,
+                                interactive=True,
+                            )
+                        tmbre = gr.Slider(
+                            value=Timbre,
+                            label=i18n("Timbre for formant shifting"),
+                            minimum=-16.0,
+                            maximum=16.0,
+                            step=0.1,
+                            visible=False,
+                            interactive=True,
+                        )
+                        
+                        formant_preset.change(fn=preset_apply, inputs=[formant_preset, qfrency, tmbre], outputs=[qfrency, tmbre])
+                        frmntbut = gr.Button("Apply", variant="primary", visible=False)
+                        formanting.change(fn=formant_enabled,inputs=[formanting,qfrency,tmbre,frmntbut,formant_preset,formant_refresh_button],outputs=[formanting,qfrency,tmbre,frmntbut,formant_preset,formant_refresh_button])
+                        frmntbut.click(fn=formant_apply,inputs=[qfrency, tmbre], outputs=[qfrency, tmbre])
+                        formant_refresh_button.click(fn=update_fshift_presets,inputs=[formant_preset, qfrency, tmbre],outputs=[formant_preset, qfrency, tmbre])
             with gr.Row():
                 vc_output1 = gr.Textbox("")
                 f0_file = gr.File(label=i18n("F0曲线文件, 可选, 一行一个音高, 代替默认F0及升降调"), visible=False)
@@ -1870,8 +2071,8 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             label=i18n(
                                 "选择音高提取算法,输入歌声可用pm提速,harvest低音好但巨慢无比,crepe效果好但吃GPU"
                             ),
-                            choices=["pm", "harvest", "crepe"],
-                            value="crepe",
+                            choices=["pm", "harvest", "crepe", "rmvpe"],
+                            value="rmvpe",
                             interactive=True,
                         )
                         filter_radius1 = gr.Slider(
@@ -1948,7 +2149,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                         format1 = gr.Radio(
                             label=i18n("导出文件格式"),
                             choices=["wav", "flac", "mp3", "m4a"],
-                            value="mp3",
+                            value="flac",
                             interactive=True,
                         )
                         but1 = gr.Button(i18n("转换"), variant="primary")
@@ -1977,7 +2178,9 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                     )
                     but1.click(fn=lambda: easy_uploader.clear())
             with gr.Row():
-                gr.Markdown(i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI<br>Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork<br>❤️ If you like the EasyGUI, help me keep it.❤️ https://paypal.me/lesantillan"))
+                gr.Markdown(
+                    i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
+                )
         with gr.TabItem(i18n("Download Model")):
             with gr.Row():
                 url=gr.Textbox(label=i18n("Enter the URL to the Model:"))
@@ -1988,271 +2191,289 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                 status_bar=gr.Textbox(label="")
                 download_button.click(fn=download_from_url, inputs=[url, model], outputs=[status_bar])
             with gr.Row():
-                gr.Markdown(i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI<br>Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork<br>❤️ If you like the EasyGUI, help me keep it.❤️ https://paypal.me/lesantillan"))
-        with gr.TabItem(i18n("Train"), visible=False):
-            with gr.Row():
-                with gr.Column():
-                    exp_dir1 = gr.Textbox(label=i18n("Voice Name:"), value=i18n("My-Voice"))
-                    sr2 = gr.Radio(
-                        label=i18n("目标采样率"),
-                        choices=["40k", "48k"],
-                        value="40k",
-                        interactive=True,
-                        visible=False
-                    )
-                    if_f0_3 = gr.Radio(
-                        label=i18n("模型是否带音高指导(唱歌一定要, 语音可以不要)"),
-                        choices=[True, False],
-                        value=True,
-                        interactive=True,
-                        visible=False
-                    )
-                    version19 = gr.Radio(
-                        label=i18n("RVC version"),
-                        choices=["v1", "v2"],
-                        value="v2",
-                        interactive=True,
-                        visible=False,
-                    )
-                    np7 = gr.Slider(
-                        minimum=0,
-                        maximum=config.n_cpu,
-                        step=1,
-                        label=i18n("# of CPUs for data processing (Leave as it is)"),
-                        value=config.n_cpu,
-                        interactive=True,
-                        visible=True
-                    )
-                    trainset_dir4 = gr.Textbox(label=i18n("Path to your dataset (audios, not zip):"), value="./dataset")
-                    easy_uploader = gr.Files(label=i18n('OR Drop your audios here. They will be uploaded in your dataset path above.'),file_types=['audio'])
-                    but1 = gr.Button(i18n("1.Process The Dataset"), variant="primary")
-                    info1 = gr.Textbox(label=i18n("Status (wait until it says 'end preprocess'):"), value="")
-                    easy_uploader.upload(fn=upload_to_dataset, inputs=[easy_uploader, trainset_dir4], outputs=[info1])
-                    but1.click(
-                        preprocess_dataset, [trainset_dir4, exp_dir1, sr2, np7], [info1]
-                    )
-                with gr.Column():
-                    spk_id5 = gr.Slider(
-                        minimum=0,
-                        maximum=4,
-                        step=1,
-                        label=i18n("请指定说话人id"),
-                        value=0,
-                        interactive=True,
-                        visible=False
-                    )
-                    with gr.Accordion(i18n('GPU Settings'), open=False, visible=False):
-                        gpus6 = gr.Textbox(
-                            label=i18n("以-分隔输入使用的卡号, 例如   0-1-2   使用卡0和卡1和卡2"),
-                            value=gpus,
+                gr.Markdown(
+                i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
+                )
+        def has_two_files_in_pretrained_folder():
+            pretrained_folder = "./pretrained/"
+            if not os.path.exists(pretrained_folder):
+                return False
+
+            files_in_folder = os.listdir(pretrained_folder)
+            num_files = len(files_in_folder)
+            return num_files >= 2
+
+        if has_two_files_in_pretrained_folder():    
+            print("Pretrained weights are downloaded. Training tab enabled!\n-------------------------------")       
+            with gr.TabItem(i18n("Train"), visible=False):
+                with gr.Row():
+                    with gr.Column():
+                        exp_dir1 = gr.Textbox(label=i18n("Voice Name:"), value=i18n("My-Voice"))
+                        sr2 = gr.Radio(
+                            label=i18n("目标采样率"),
+                            choices=["40k", "48k"],
+                            value="40k",
                             interactive=True,
                             visible=False
                         )
-                        gpu_info9 = gr.Textbox(label=i18n("显卡信息"), value=gpu_info)
-                    f0method8 = gr.Radio(
-                        label=i18n(
-                            "选择音高提取算法:输入歌声可用pm提速,高质量语音但CPU差可用dio提速,harvest质量更好但慢"
-                        ),
-                        choices=["harvest","crepe", "mangio-crepe"], # Fork feature: Crepe on f0 extraction for training.
-                        value="mangio-crepe",
-                        interactive=True,
-                    )
-                    extraction_crepe_hop_length = gr.Slider(
-                        minimum=1,
-                        maximum=512,
-                        step=1,
-                        label=i18n("crepe_hop_length"),
-                        value=128,
-                        interactive=True
-                    )
-                    but2 = gr.Button(i18n("2.Pitch Extraction"), variant="primary")
-                    info2 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=8)
-                    but2.click(
-                            extract_f0_feature,
-                            [gpus6, np7, f0method8, if_f0_3, exp_dir1, version19, extraction_crepe_hop_length],
-                            [info2],
+                        if_f0_3 = gr.Radio(
+                            label=i18n("模型是否带音高指导(唱歌一定要, 语音可以不要)"),
+                            choices=[True, False],
+                            value=True,
+                            interactive=True,
+                            visible=False
                         )
-                with gr.Row():      
-                    with gr.Column():
-                        total_epoch11 = gr.Slider(
+                        version19 = gr.Radio(
+                            label=i18n("RVC version"),
+                            choices=["v1", "v2"],
+                            value="v2",
+                            interactive=True,
+                            visible=False,
+                        )
+                        np7 = gr.Slider(
                             minimum=0,
-                            maximum=10000,
-                            step=10,
-                            label=i18n("Total # of training epochs (IF you choose a value too high, your model will sound horribly overtrained.):"),
-                            value=250,
+                            maximum=config.n_cpu,
+                            step=1,
+                            label=i18n("# of CPUs for data processing (Leave as it is)"),
+                            value=config.n_cpu,
+                            interactive=True,
+                            visible=True
+                        )
+                        trainset_dir4 = gr.Textbox(label=i18n("Path to your dataset (audios, not zip):"), value="./dataset")
+                        easy_uploader = gr.Files(label=i18n('OR Drop your audios here. They will be uploaded in your dataset path above.'),file_types=['audio'])
+                        but1 = gr.Button(i18n("1.Process The Dataset"), variant="primary")
+                        info1 = gr.Textbox(label=i18n("Status (wait until it says 'end preprocess'):"), value="")
+                        easy_uploader.upload(fn=upload_to_dataset, inputs=[easy_uploader, trainset_dir4], outputs=[info1])
+                        but1.click(
+                            preprocess_dataset, [trainset_dir4, exp_dir1, sr2, np7], [info1]
+                        )
+                    with gr.Column():
+                        spk_id5 = gr.Slider(
+                            minimum=0,
+                            maximum=4,
+                            step=1,
+                            label=i18n("请指定说话人id"),
+                            value=0,
+                            interactive=True,
+                            visible=False
+                        )
+                        with gr.Accordion(i18n('GPU Settings'), open=False, visible=False):
+                            gpus6 = gr.Textbox(
+                                label=i18n("以-分隔输入使用的卡号, 例如   0-1-2   使用卡0和卡1和卡2"),
+                                value=gpus,
+                                interactive=True,
+                                visible=False
+                            )
+                            gpu_info9 = gr.Textbox(label=i18n("显卡信息"), value=gpu_info)
+                        f0method8 = gr.Radio(
+                            label=i18n(
+                                "选择音高提取算法:输入歌声可用pm提速,高质量语音但CPU差可用dio提速,harvest质量更好但慢"
+                            ),
+                            choices=["harvest","crepe", "mangio-crepe", "rmvpe"], # Fork feature: Crepe on f0 extraction for training.
+                            value="rmvpe",
                             interactive=True,
                         )
-                        but3 = gr.Button(i18n("3.Train Model"), variant="primary")
-                        but4 = gr.Button(i18n("4.Train Index"), variant="primary")
-                        info3 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=10)
-                        with gr.Accordion(i18n("Training Preferences (You can leave these as they are)"), open=False):
-                            #gr.Markdown(value=i18n("step3: 填写训练设置, 开始训练模型和索引"))
-                            with gr.Column():
-                                save_epoch10 = gr.Slider(
-                                    minimum=0,
-                                    maximum=100,
-                                    step=5,
-                                    label=i18n("Backup every # of epochs:"),
-                                    value=25,
-                                    interactive=True,
-                                )
-                                batch_size12 = gr.Slider(
-                                    minimum=1,
-                                    maximum=40,
-                                    step=1,
-                                    label=i18n("Batch Size (LEAVE IT unless you know what you're doing!):"),
-                                    value=20,
-                                    interactive=True,
-                                )
-                                if_save_latest13 = gr.Radio(
-                                    label=i18n("是否仅保存最新的ckpt文件以节省硬盘空间"),
-                                    choices=[i18n("是"), i18n("否")],
-                                    value=i18n("是"),
-                                    interactive=True,
-                                )
-                                if_cache_gpu17 = gr.Radio(
-                                    label=i18n(
-                                        "是否缓存所有训练集至显存. 10min以下小数据可缓存以加速训练, 大数据缓存会炸显存也加不了多少速"
-                                    ),
-                                    choices=[i18n("是"), i18n("否")],
-                                    value=i18n("否"),
-                                    interactive=True,
-                                )
-                                if_save_every_weights18 = gr.Radio(
-                                    label=i18n("是否在每次保存时间点将最终小模型保存至weights文件夹"),
-                                    choices=[i18n("是"), i18n("否")],
-                                    value=i18n("是"),
-                                    interactive=True,
-                                )
-                        with gr.Accordion(i18n("Calculadora de tempo"), open=False):
-                            with gr.Blocks() as demo:
-                                num_epochs_inicio_entry = gr.Number(label=i18n("Numero de epochs inicial:"), minimum=0, maximum=10000)
-                                num_epochs_fim_entry = gr.Number(label=i18n("Numero de epochs final:"), minimum=0, maximum=10000)
-                                tempo_epoch_entry = gr.Number(label=i18n("Tempo médio por epoch (segundos):"))
-                                with gr.Row():
-                                    submit_btn = gr.Button(i18n("Calcular"))
-                                diagnosis_box1 = gr.Textbox(label=i18n("Resultado"))
-
-                                def calcular(num1, num2, num3):
-                                    segundos_total = (num2 - num1) * num3
-                                    minutos = int((segundos_total % 3600) // 60)  # 1 minuto = 60 segundos
-                                    horas = int(segundos_total // 3600)  # 1 hora = 3600 segundos
-                                    segundos = int(segundos_total % 60)
-                                    return {
-                                        diagnosis_box1: i18n(f"{horas}:{minutos}\n\nVai levar {horas} hr(s): {minutos} minuto(s): {segundos} e segundos(s) aproximadamente"),
-                                        }
-                                # tempo_total = (num_epochs_fim - num_epochs_inicio) * tempo_medio_por_epoch
-                                submit_btn.click(calcular, inputs=[num_epochs_inicio_entry, num_epochs_fim_entry, tempo_epoch_entry], outputs=diagnosis_box1)
-                                                # "Tempo total estimado: {tempo_total:.2f} segundos"
-                            with gr.Accordion(i18n("Minutos para segundos"), open=False):
+                        extraction_crepe_hop_length = gr.Slider(
+                            minimum=1,
+                            maximum=512,
+                            step=1,
+                            label=i18n("crepe_hop_length"),
+                            value=128,
+                            interactive=True
+                        )
+                        but2 = gr.Button(i18n("2.Pitch Extraction"), variant="primary")
+                        info2 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=8)
+                        but2.click(
+                                extract_f0_feature,
+                                [gpus6, np7, f0method8, if_f0_3, exp_dir1, version19, extraction_crepe_hop_length],
+                                [info2],
+                            )
+                    with gr.Row():      
+                        with gr.Column():
+                            total_epoch11 = gr.Slider(
+                                minimum=0,
+                                maximum=10000,
+                                step=10,
+                                label=i18n("Total # of training epochs (IF you choose a value too high, your model will sound horribly overtrained.):"),
+                                value=250,
+                                interactive=True,
+                            )
+                            but3 = gr.Button(i18n("3.Train Model"), variant="primary")
+                            but4 = gr.Button(i18n("4.Train Index"), variant="primary")
+                            info3 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=10)
+                            with gr.Accordion(i18n("Training Preferences (You can leave these as they are)"), open=False):
+                                #gr.Markdown(value=i18n("step3: 填写训练设置, 开始训练模型和索引"))
+                                with gr.Column():
+                                    save_epoch10 = gr.Slider(
+                                        minimum=0,
+                                        maximum=200,
+                                        step=5,
+                                        label=i18n("Backup every # of epochs:"),
+                                        value=25,
+                                        interactive=True,
+                                    )
+                                    batch_size12 = gr.Slider(
+                                        minimum=1,
+                                        maximum=40,
+                                        step=1,
+                                        label=i18n("Batch Size (LEAVE IT unless you know what you're doing!):"),
+                                        value=20,
+                                        interactive=True,
+                                    )
+                                    if_save_latest13 = gr.Radio(
+                                        label=i18n("是否仅保存最新的ckpt文件以节省硬盘空间"),
+                                        choices=[i18n("是"), i18n("否")],
+                                        value=i18n("是"),
+                                        interactive=True,
+                                    )
+                                    if_cache_gpu17 = gr.Radio(
+                                        label=i18n(
+                                            "是否缓存所有训练集至显存. 10min以下小数据可缓存以加速训练, 大数据缓存会炸显存也加不了多少速"
+                                        ),
+                                        choices=[i18n("是"), i18n("否")],
+                                        value=i18n("否"),
+                                        interactive=True,
+                                    )
+                                    if_save_every_weights18 = gr.Radio(
+                                        label=i18n("是否在每次保存时间点将最终小模型保存至weights文件夹"),
+                                        choices=[i18n("是"), i18n("否")],
+                                        value=i18n("是"),
+                                        interactive=True,
+                                    )
+                            with gr.Accordion(i18n("Calculadora de tempo"), open=False):
                                 with gr.Blocks() as demo:
-                                    num_epochs_inicio_entry = gr.Number(label=i18n("Minutos"))
+                                    num_epochs_inicio_entry = gr.Number(label=i18n("Numero de epochs inicial:"), minimum=0, maximum=10000)
+                                    num_epochs_fim_entry = gr.Number(label=i18n("Numero de epochs final:"), minimum=0, maximum=10000)
+                                    tempo_epoch_entry = gr.Number(label=i18n("Tempo médio por epoch (segundos):"))
                                     with gr.Row():
                                         submit_btn = gr.Button(i18n("Calcular"))
-                                    diagnosis_box2 = gr.Textbox(label=i18n("Resultado"))
-
-                                    def calcularsec(minutos):
-                                         mintosec = int(minutos * 60)
-                                         return {
-                                             diagnosis_box2: i18n(f"{mintosec} segundos."),
-                                             }
+                                    diagnosis_box1 = gr.Textbox(label=i18n("Resultado"))
+    
+                                    def calcular(num1, num2, num3):
+                                        segundos_total = (num2 - num1) * num3
+                                        minutos = int((segundos_total % 3600) // 60)  # 1 minuto = 60 segundos
+                                        horas = int(segundos_total // 3600)  # 1 hora = 3600 segundos
+                                        segundos = int(segundos_total % 60)
+                                        return {
+                                            diagnosis_box1: i18n(f"{horas}:{minutos}\n\nVai levar {horas} hr(s): {minutos} minuto(s): {segundos} e segundos(s) aproximadamente"),
+                                            }
                                     # tempo_total = (num_epochs_fim - num_epochs_inicio) * tempo_medio_por_epoch
-                                    submit_btn.click(calcularsec, inputs=[num_epochs_inicio_entry], outputs=diagnosis_box2)
-                                                    # "Tempo total estimado: {tempo_total:.2f} segundos"                       
-                        zip_model = gr.Button(i18n('5.Download Model'))
-                        zipped_model = gr.Files(label=i18n('Your Model and Index file can be downloaded here:'))
-                        zip_model.click(fn=zip_downloader, inputs=[exp_dir1], outputs=[zipped_model, info3])
-            with gr.Group():
-                with gr.Accordion(i18n("Base Model Locations:"), open=False, visible=False):
-                    pretrained_G14 = gr.Textbox(
-                        label=i18n("加载预训练底模G路径"),
-                        value="pretrained_v2/f0G40k.pth",
-                        interactive=True,
+                                    submit_btn.click(calcular, inputs=[num_epochs_inicio_entry, num_epochs_fim_entry, tempo_epoch_entry], outputs=diagnosis_box1)
+                                                    # "Tempo total estimado: {tempo_total:.2f} segundos"
+                                with gr.Accordion(i18n("Minutos para segundos"), open=False):
+                                    with gr.Blocks() as demo:
+                                        num_epochs_inicio_entry = gr.Number(label=i18n("Minutos"))
+                                        with gr.Row():
+                                            submit_btn = gr.Button(i18n("Calcular"))
+                                        diagnosis_box2 = gr.Textbox(label=i18n("Resultado"))
+    
+                                        def calcularsec(minutos):
+                                             mintosec = int(minutos * 60)
+                                             return {
+                                                 diagnosis_box2: i18n(f"{mintosec} segundos."),
+                                                 }
+                                        # tempo_total = (num_epochs_fim - num_epochs_inicio) * tempo_medio_por_epoch
+                                        submit_btn.click(calcularsec, inputs=[num_epochs_inicio_entry], outputs=diagnosis_box2)
+                                                        # "Tempo total estimado: {tempo_total:.2f} segundos"                       
+                            zip_model = gr.Button(i18n('5.Download Model'))
+                            zipped_model = gr.Files(label=i18n('Your Model and Index file can be downloaded here:'))
+                            zip_model.click(fn=zip_downloader, inputs=[exp_dir1], outputs=[zipped_model, info3])
+                with gr.Group():
+                    with gr.Accordion(i18n("Base Model Locations:"), open=False, visible=False):
+                        pretrained_G14 = gr.Textbox(
+                            label=i18n("加载预训练底模G路径"),
+                            value="pretrained_v2/f0G40k.pth",
+                            interactive=True,
+                        )
+                        pretrained_D15 = gr.Textbox(
+                            label=i18n("加载预训练底模D路径"),
+                            value="pretrained_v2/f0D40k.pth",
+                            interactive=True,
+                        )
+                        gpus16 = gr.Textbox(
+                            label=i18n("以-分隔输入使用的卡号, 例如   0-1-2   使用卡0和卡1和卡2"),
+                            value=gpus,
+                            interactive=True,
+                        )
+                    sr2.change(
+                        change_sr2,
+                        [sr2, if_f0_3, version19],
+                        [pretrained_G14, pretrained_D15, version19],
                     )
-                    pretrained_D15 = gr.Textbox(
-                        label=i18n("加载预训练底模D路径"),
-                        value="pretrained_v2/f0D40k.pth",
-                        interactive=True,
+                    version19.change(
+                        change_version19,
+                        [sr2, if_f0_3, version19],
+                        [pretrained_G14, pretrained_D15],
                     )
-                    gpus16 = gr.Textbox(
-                        label=i18n("以-分隔输入使用的卡号, 例如   0-1-2   使用卡0和卡1和卡2"),
-                        value=gpus,
-                        interactive=True,
+                    if_f0_3.change(
+                        change_f0,
+                        [if_f0_3, sr2, version19],
+                        [f0method8, pretrained_G14, pretrained_D15],
                     )
-                sr2.change(
-                    change_sr2,
-                    [sr2, if_f0_3, version19],
-                    [pretrained_G14, pretrained_D15, version19],
-                )
-                version19.change(
-                    change_version19,
-                    [sr2, if_f0_3, version19],
-                    [pretrained_G14, pretrained_D15],
-                )
-                if_f0_3.change(
-                    change_f0,
-                    [if_f0_3, sr2, version19],
-                    [f0method8, pretrained_G14, pretrained_D15],
-                )
-                but5 = gr.Button(i18n("一键训练"), variant="primary", visible=False)
-                but3.click(
-                    click_train,
-                    [
-                        exp_dir1,
-                        sr2,
-                        if_f0_3,
-                        spk_id5,
-                        save_epoch10,
-                        total_epoch11,
-                        batch_size12,
-                        if_save_latest13,
-                        pretrained_G14,
-                        pretrained_D15,
-                        gpus16,
-                        if_cache_gpu17,
-                        if_save_every_weights18,
-                        version19,
-                    ],
-                    info3,
-                )
-                but4.click(train_index, [exp_dir1, version19], info3)
-                but5.click(
-                    train1key,
-                    [
-                        exp_dir1,
-                        sr2,
-                        if_f0_3,
-                        trainset_dir4,
-                        spk_id5,
-                        np7,
-                        f0method8,
-                        save_epoch10,
-                        total_epoch11,
-                        batch_size12,
-                        if_save_latest13,
-                        pretrained_G14,
-                        pretrained_D15,
-                        gpus16,
-                        if_cache_gpu17,
-                        if_save_every_weights18,
-                        version19,
-                        extraction_crepe_hop_length
-                    ],
-                    info3,
-                )
-            with gr.Row():
-                gr.Markdown(i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI<br>Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork<br>❤️ If you like the EasyGUI, help me keep it.❤️ https://paypal.me/lesantillan"))
+                    but5 = gr.Button(i18n("一键训练"), variant="primary", visible=False)
+                    but3.click(
+                        click_train,
+                        [
+                            exp_dir1,
+                            sr2,
+                            if_f0_3,
+                            spk_id5,
+                            save_epoch10,
+                            total_epoch11,
+                            batch_size12,
+                            if_save_latest13,
+                            pretrained_G14,
+                            pretrained_D15,
+                            gpus16,
+                            if_cache_gpu17,
+                            if_save_every_weights18,
+                            version19,
+                        ],
+                        info3,
+                    )
+                    but4.click(train_index, [exp_dir1, version19], info3)
+                    but5.click(
+                        train1key,
+                        [
+                            exp_dir1,
+                            sr2,
+                            if_f0_3,
+                            trainset_dir4,
+                            spk_id5,
+                            np7,
+                            f0method8,
+                            save_epoch10,
+                            total_epoch11,
+                            batch_size12,
+                            if_save_latest13,
+                            pretrained_G14,
+                            pretrained_D15,
+                            gpus16,
+                            if_cache_gpu17,
+                            if_save_every_weights18,
+                            version19,
+                            extraction_crepe_hop_length
+                        ],
+                        info3,
+                    )
 
-            try:
-                if tab_faq == "常见问题解答":
-                    with open("docs/faq.md", "r", encoding="utf8") as f:
-                        info = f.read()
-                else:
-                    with open("docs/faq_en.md", "r", encoding="utf8") as f:
-                        info = f.read()
-                gr.Markdown(value=info)
-            except:
-                gr.Markdown("")
+
+                try:
+                    if tab_faq == "常见问题解答":
+                        with open("docs/faq.md", "r", encoding="utf8") as f:
+                            info = f.read()
+                    else:
+                        with open("docs/faq_en.md", "r", encoding="utf8") as f:
+                            info = f.read()
+                    gr.Markdown(value=info)
+                except:
+                    gr.Markdown(
+                i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
+                    )
+        else:
+            print("Pretrained weights not downloaded. Disabling training tab.")
+            print("Wondering how to train a voice? Visit here for the RVC model training guide: https://t.ly/RVC_Training_Guide")
+            print("-------------------------------\n")
         
         tab_faq = i18n("常见问题解答")
         with gr.TabItem(tab_faq):
@@ -2266,7 +2487,6 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                 gr.Markdown(value=info)
             except:
                 gr.Markdown(traceback.format_exc())
-
 
     #region Mangio Preset Handler Region
     def save_preset(preset_name,sid0,vc_transform,input_audio,f0method,crepe_hop_length,filter_radius,file_index1,file_index2,index_rate,resample_sr,rms_mix_rate,protect,f0_file):

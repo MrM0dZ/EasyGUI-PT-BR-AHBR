@@ -162,7 +162,7 @@ with open('formanting.txt', 'r') as fvf:
         pass
     Quefrency, Timbre = content[1].split('\n')[0], content[2].split('\n')[0]
 
-i18n = I18nAuto()
+i18n = I18nAuto(language="pt_BR")
 #i18n.print()
 # 判断是否有能用来训练和加速推理的N卡
 ngpu = torch.cuda.device_count()

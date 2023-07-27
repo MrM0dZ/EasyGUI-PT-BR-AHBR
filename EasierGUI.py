@@ -113,11 +113,9 @@ def formant_apply(qfrency, tmbre):
     Quefrency = qfrency
     Timbre = tmbre
     DoFormant = True
-    
-    with open('formanting.txt', 'w') as fxxxf:
-        fxxxf.truncate(0)
-
-        fxxxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
+    cursor.execute("DELETE FROM formant_data")	
+    cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, 1))	
+    conn.commit()
     return ({"value": Quefrency, "__type__": "update"}, {"value": Timbre, "__type__": "update"})
 
 def get_fshift_presets():
@@ -139,10 +137,10 @@ def formant_enabled(cbox, qfrency, tmbre, frmntapply, formantpreset, formant_ref
     if (cbox):
 
         DoFormant = True
-        with open('formanting.txt', 'w') as fxxf:
-            fxxf.truncate(0)
+        cursor.execute("DELETE FROM formant_data")	
+        cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, 1))	
+        conn.commit()
 
-            fxxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
         #print(f"is checked? - {cbox}\ngot {DoFormant}")
         
         return (
@@ -158,10 +156,9 @@ def formant_enabled(cbox, qfrency, tmbre, frmntapply, formantpreset, formant_ref
     else:
         
         DoFormant = False
-        with open('formanting.txt', 'w') as fxf:
-            fxf.truncate(0)
-
-            fxf.writelines([str(DoFormant) + '\n', str(Quefrency) + '\n', str(Timbre) + '\n'])
+        cursor.execute("DELETE FROM formant_data")	
+        cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, int(DoFormant)))	
+        conn.commit()
         #print(f"is checked? - {cbox}\ngot {DoFormant}")
         return (
             {"value": False, "__type__": "update"},
@@ -203,17 +200,6 @@ def update_fshift_presets(preset, qfrency, tmbre):
         {"value": qfrency, "__type__": "update"},
         {"value": tmbre, "__type__": "update"},
     )
-
-DoFormant = False
-
-with open('formanting.txt', 'r') as fvf:
-    content = fvf.readlines()
-    if 'True' in content[0]:
-        DoFormant = True
-    else:
-        DoFormant = False
-        pass
-    Quefrency, Timbre = content[1].split('\n')[0], content[2].split('\n')[0]
 
 i18n = I18nAuto(language="pt_BR")
 #i18n.print()
@@ -881,6 +867,8 @@ def click_train(
     if_save_every_weights18,
     version19,
 ):
+    cursor.execute("DELETE FROM stop_train")	
+    conn.commit()
     # 生成filelist
     exp_dir = "%s/logs/%s" % (now_dir, exp_dir1)
     os.makedirs(exp_dir, exist_ok=True)
@@ -1301,7 +1289,10 @@ def train1key(
         % (n_ivf, index_ivf.nprobe, exp_dir1, version19)
     )
     yield get_info_str(i18n("全流程结束！"))
-
+    		
+def whethercrepeornah(radio):	
+    mango = True if radio == 'mangio-crepe' or radio == 'mangio-crepe-tiny' else False	
+    return ({"visible": mango, "__type__": "update"})
 
 #                    ckpt_path2.change(change_info_,[ckpt_path2],[sr__,if_f0__])
 def change_info_(ckpt_path):
@@ -2066,9 +2057,9 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             interactive=True,
                             )
                         formanting = gr.Checkbox(
-                            value=False,
-                            label=i18n("[EXPERIMENTAL, WAV ONLY] Formant shift inference audio"),
-                            info=i18n("Used for male to female and vice-versa conversions"),
+                            value=bool(DoFormant),
+                            label="[EXPERIMENTAL] Formant shift inference audio",
+                            info="Used for male to female and vice-versa conversions",
                             interactive=True,
                             visible=True,
                         )
@@ -2076,9 +2067,17 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                         formant_preset = gr.Dropdown(
                             value='',
                             choices=get_fshift_presets(),
-                            label=i18n("browse presets for formanting"),
-                            visible=False,
+                            label="browse presets for formanting",
+                            visible=bool(DoFormant),
                         )
+                        formant_refresh_button = gr.Button(
+                            value='\U0001f504',
+                            visible=bool(DoFormant),
+                            variant='primary',
+                        )
+
+                        #formant_refresh_button = ToolButton( elem_id='1')
+                        #create_refresh_button(formant_preset, lambda: {"choices": formant_preset}, "refresh_list_shiftpresets")
                         formant_refresh_button = gr.Button(value='\U0001f504', visible=False,variant='primary')
                         #formant_refresh_button = ToolButton( elem_id='1')
                         #create_refresh_button(formant_preset, lambda: {"choices": formant_preset}, "refresh_list_shiftpresets")
@@ -2103,7 +2102,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                         )
                         
                         formant_preset.change(fn=preset_apply, inputs=[formant_preset, qfrency, tmbre], outputs=[qfrency, tmbre])
-                        frmntbut = gr.Button("Apply", variant="primary", visible=False)
+                        frmntbut = gr.Button("Apply", variant="primary", visible=bool(DoFormant))
                         formanting.change(fn=formant_enabled,inputs=[formanting,qfrency,tmbre,frmntbut,formant_preset,formant_refresh_button],outputs=[formanting,qfrency,tmbre,frmntbut,formant_preset,formant_refresh_button])
                         frmntbut.click(fn=formant_apply,inputs=[qfrency, tmbre], outputs=[qfrency, tmbre])
                         formant_refresh_button.click(fn=update_fshift_presets,inputs=[formant_preset, qfrency, tmbre],outputs=[formant_preset, qfrency, tmbre])
@@ -2370,7 +2369,16 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                                 value=250,
                                 interactive=True,
                             )
-                            but3 = gr.Button(i18n("3.Train Model"), variant="primary")
+                            butstop = gr.Button(
+                                "Stop Training",
+                                variant='primary',
+                                visible=False,
+                            )
+                            but3 = gr.Button("3. Train Model", variant="primary", visible=True)
+                            
+                            but3.click(fn=stoptraining, inputs=[gr.Number(value=0, visible=False)], outputs=[but3, butstop])
+                            butstop.click(fn=stoptraining, inputs=[gr.Number(value=1, visible=False)], outputs=[butstop, but3])
+                            
                             but4 = gr.Button(i18n("4.Train Index"), variant="primary")
                             info3 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=10)
                             with gr.Accordion(i18n("Training Preferences (You can leave these as they are)"), open=False):
@@ -2500,8 +2508,12 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             if_cache_gpu17,
                             if_save_every_weights18,
                             version19,
+	                    ],
+                        [	
+                            info3,	
+                            butstop,	
+                            but3,	
                         ],
-                        info3,
                     )
                     but4.click(train_index, [exp_dir1, version19], info3)
                     but5.click(

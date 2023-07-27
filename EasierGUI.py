@@ -23,7 +23,60 @@ torch.manual_seed(114514)
 from i18n import I18nAuto
 import ffmpeg
 
+import signal
+
 import math
+import sqlite3
+
+conn = sqlite3.connect('TEMP/db:cachedb?mode=memory&cache=shared', check_same_thread=False)
+cursor = conn.cursor()
+
+
+
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS formant_data (
+        Quefrency FLOAT,
+        Timbre FLOAT,
+        DoFormant INTEGER
+    )
+""")
+
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS stop_train (
+        stop BOOL
+    )
+""")
+
+def clear_sql(signal, frame):
+    cursor.execute("DELETE FROM formant_data")
+    cursor.execute("DELETE FROM stop_train")
+    conn.commit()
+    conn.close()
+    print("Clearing SQL database...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, clear_sql)
+signal.signal(signal.SIGTERM, clear_sql)
+
+global DoFormant, Quefrency, Timbre
+
+try:
+    cursor.execute("SELECT Quefrency, Timbre, DoFormant FROM formant_data")
+    row = cursor.fetchone()
+    if row is not None:
+        Quefrency, Timbre, DoFormant = row
+    else:
+        raise ValueError("No data")
+    
+except (ValueError, TypeError):
+    Quefrency = 8.0
+    Timbre = 1.2
+    DoFormant = False
+    cursor.execute("DELETE FROM formant_data")
+    cursor.execute("DELETE FROM stop_train")
+    cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (Quefrency, Timbre, 0))
+    conn.commit()
 
 #from MDXNet import MDXNetDereverb
 
@@ -1775,6 +1828,25 @@ def mouth(size, face, voice, faces):
 eleven_voices = ['Adam','Antoni','Josh','Arnold','Sam','Bella','Rachel','Domi','Elli']
 eleven_voices_ids=['pNInz6obpgDQGcFmaJgB','ErXwobaYiN019PkySvjV','TxGEqnHWrfWFTfGW9XjX','VR6AewLTigWG4xSOukaG','yoZ06aMxZJJ28mfd3POQ','EXAVITQu4vr4xnSDxMaL','21m00Tcm4TlvDq8ikWAM','AZnzlk1XvdvUeBnXmlld','MF3mGyEYCl7XYWbV9V6O']
 chosen_voice = dict(zip(eleven_voices, eleven_voices_ids))
+def stoptraining(mim): 	
+    if int(mim) == 1:	
+        	
+        cursor.execute("INSERT INTO stop_train (stop) VALUES (?)", (True,))	
+        conn.commit()	
+        #p.terminate()	
+        #p.kill()	
+        try:	
+            os.kill(PID, signal.SIGTERM)	
+        except Exception as e:	
+            print(f"Couldn't click due to {e}")	
+            pass	
+    else:	
+        pass	
+    	
+    return (	
+        {"visible": False, "__type__": "update"}, 	
+        {"visible": True, "__type__": "update"},	
+    )
 def elevenTTS(xiapi, text, id, lang):
     if xiapi!= '' and id !='': 
         choice = chosen_voice[id]

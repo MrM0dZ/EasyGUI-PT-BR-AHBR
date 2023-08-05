@@ -1,4 +1,4 @@
-import zipfile, glob, subprocess, torch, os, traceback, sys, warnings, shutil, numpy as np
+import subprocess, torch, os, traceback, sys, warnings, shutil, numpy as np
 from mega import Mega
 os.environ["no_proxy"] = "localhost, 127.0.0.1, ::1"
 import threading
@@ -26,57 +26,25 @@ import ffmpeg
 import signal
 
 import math
-import sqlite3
 
-conn = sqlite3.connect('TEMP/db:cachedb?mode=memory&cache=shared', check_same_thread=False)
-cursor = conn.cursor()
-
-
-
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS formant_data (
-        Quefrency FLOAT,
-        Timbre FLOAT,
-        DoFormant INTEGER
-    )
-""")
-
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS stop_train (
-        stop BOOL
-    )
-""")
-
-def clear_sql(signal, frame):
-    cursor.execute("DELETE FROM formant_data")
-    cursor.execute("DELETE FROM stop_train")
-    conn.commit()
-    conn.close()
-    print("Clearing SQL database...")
-    sys.exit(0)
-
-signal.signal(signal.SIGINT, clear_sql)
-signal.signal(signal.SIGTERM, clear_sql)
+from my_utils import load_audio, CSVutil
 
 global DoFormant, Quefrency, Timbre
 
+if not os.path.isdir('csvdb/'):
+    os.makedirs('csvdb')
+    frmnt, stp = open("csvdb/formanting.csv", 'w'), open("csvdb/stop.csv", 'w')
+    frmnt.close()
+    stp.close()
+
 try:
-    cursor.execute("SELECT Quefrency, Timbre, DoFormant FROM formant_data")
-    row = cursor.fetchone()
-    if row is not None:
-        Quefrency, Timbre, DoFormant = row
-    else:
-        raise ValueError("No data")
-    
-except (ValueError, TypeError):
-    Quefrency = 8.0
-    Timbre = 1.2
-    DoFormant = False
-    cursor.execute("DELETE FROM formant_data")
-    cursor.execute("DELETE FROM stop_train")
-    cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (Quefrency, Timbre, 0))
-    conn.commit()
+    DoFormant, Quefrency, Timbre = CSVutil('csvdb/formanting.csv', 'r', 'formanting')
+    DoFormant = (
+        lambda DoFormant: True if DoFormant.lower() == 'true' else (False if DoFormant.lower() == 'false' else DoFormant)
+    )(DoFormant)
+except (ValueError, TypeError, IndexError):
+    DoFormant, Quefrency, Timbre = False, 1.0, 1.0
+    CSVutil('csvdb/formanting.csv', 'w+', 'formanting', DoFormant, Quefrency, Timbre)
 
 #from MDXNet import MDXNetDereverb
 
@@ -106,21 +74,20 @@ if os.path.exists('/content/'):
             # If the response was a failure, print an error message
             print("Failed to download file. Status code: " + str(response.status_code) + ".")
 else:
-    print("\n-------------------------------\nRVC v2 Easy GUI (Local Edition))\n-------------------------------\n")
+    print("\n-------------------------------\nRVC v2 Easy GUI (Local Edition)\n-------------------------------\n")
     print("-------------------------------\nNot running on Google Colab, skipping download.")
 
 def formant_apply(qfrency, tmbre):
     Quefrency = qfrency
     Timbre = tmbre
     DoFormant = True
-    cursor.execute("DELETE FROM formant_data")	
-    cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, 1))	
-    conn.commit()
+    CSVutil('csvdb/formanting.csv', 'w+', 'formanting', DoFormant, qfrency, tmbre)
+    
     return ({"value": Quefrency, "__type__": "update"}, {"value": Timbre, "__type__": "update"})
 
 def get_fshift_presets():
     fshift_presets_list = []
-    for dirpath, dirnames, filenames in os.walk("./formantshiftcfg/"):
+    for dirpath, _, filenames in os.walk("./formantshiftcfg/"):
         for filename in filenames:
             if filename.endswith(".txt"):
                 fshift_presets_list.append(os.path.join(dirpath,filename).replace('\\','/'))
@@ -137,10 +104,7 @@ def formant_enabled(cbox, qfrency, tmbre, frmntapply, formantpreset, formant_ref
     if (cbox):
 
         DoFormant = True
-        cursor.execute("DELETE FROM formant_data")	
-        cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, 1))	
-        conn.commit()
-
+        CSVutil('csvdb/formanting.csv', 'w+', 'formanting', DoFormant, qfrency, tmbre)
         #print(f"is checked? - {cbox}\ngot {DoFormant}")
         
         return (
@@ -156,9 +120,8 @@ def formant_enabled(cbox, qfrency, tmbre, frmntapply, formantpreset, formant_ref
     else:
         
         DoFormant = False
-        cursor.execute("DELETE FROM formant_data")	
-        cursor.execute("INSERT INTO formant_data (Quefrency, Timbre, DoFormant) VALUES (?, ?, ?)", (qfrency, tmbre, int(DoFormant)))	
-        conn.commit()
+        CSVutil('csvdb/formanting.csv', 'w+', 'formanting', DoFormant, qfrency, tmbre)
+        
         #print(f"is checked? - {cbox}\ngot {DoFormant}")
         return (
             {"value": False, "__type__": "update"},
@@ -262,9 +225,6 @@ import gradio as gr
 import logging
 from vc_infer_pipeline import VC
 from config import Config
-from infer_uvr5 import _audio_pre_, _audio_pre_new
-from my_utils import load_audio
-from train.process_ckpt import show_info, change_info, merge, extract_small_model
 
 config = Config()
 # from trainset_preprocess_pipeline import PreProcess
@@ -288,7 +248,6 @@ def load_hubert():
 
 
 weight_root = "weights"
-weight_uvr5_root = "uvr5_weights"
 index_root = "logs"
 names = []
 for name in os.listdir(weight_root):
@@ -299,10 +258,7 @@ for root, dirs, files in os.walk(index_root, topdown=False):
     for name in files:
         if name.endswith(".index") and "trained" not in name:
             index_paths.append("%s/%s" % (root, name))
-uvr5_names = []
-for name in os.listdir(weight_uvr5_root):
-    if name.endswith(".pth") or "onnx" in name:
-        uvr5_names.append(name.replace(".pth", ""))
+
 
 
 def vc_single(
@@ -429,7 +385,6 @@ def vc_multi(
                 None,
                 f0_method,
                 file_index,
-                file_index2,
                 # file_big_npy,
                 index_rate,
                 filter_radius,
@@ -466,87 +421,6 @@ def vc_multi(
         yield "\n".join(infos)
     except:
         yield traceback.format_exc()
-
-
-def uvr(model_name, inp_root, save_root_vocal, paths, save_root_ins, agg, format0):
-    infos = []
-    try:
-        inp_root = inp_root.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
-        save_root_vocal = (
-            save_root_vocal.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
-        )
-        save_root_ins = (
-            save_root_ins.strip(" ").strip('"').strip("\n").strip('"').strip(" ")
-        )
-        if model_name == "onnx_dereverb_By_FoxJoy":
-            pre_fun = MDXNetDereverb(15)
-        else:
-            func = _audio_pre_ if "DeEcho" not in model_name else _audio_pre_new
-            pre_fun = func(
-                agg=int(agg),
-                model_path=os.path.join(weight_uvr5_root, model_name + ".pth"),
-                device=config.device,
-                is_half=config.is_half,
-            )
-        if inp_root != "":
-            paths = [os.path.join(inp_root, name) for name in os.listdir(inp_root)]
-        else:
-            paths = [path.name for path in paths]
-        for path in paths:
-            inp_path = os.path.join(inp_root, path)
-            need_reformat = 1
-            done = 0
-            try:
-                info = ffmpeg.probe(inp_path, cmd="ffprobe")
-                if (
-                    info["streams"][0]["channels"] == 2
-                    and info["streams"][0]["sample_rate"] == "44100"
-                ):
-                    need_reformat = 0
-                    pre_fun._path_audio_(
-                        inp_path, save_root_ins, save_root_vocal, format0
-                    )
-                    done = 1
-            except:
-                need_reformat = 1
-                traceback.print_exc()
-            if need_reformat == 1:
-                tmp_path = "%s/%s.reformatted.wav" % (tmp, os.path.basename(inp_path))
-                os.system(
-                    "ffmpeg -i %s -vn -acodec pcm_s16le -ac 2 -ar 44100 %s -y"
-                    % (inp_path, tmp_path)
-                )
-                inp_path = tmp_path
-            try:
-                if done == 0:
-                    pre_fun._path_audio_(
-                        inp_path, save_root_ins, save_root_vocal, format0
-                    )
-                infos.append("%s->Success" % (os.path.basename(inp_path)))
-                yield "\n".join(infos)
-            except:
-                infos.append(
-                    "%s->%s" % (os.path.basename(inp_path), traceback.format_exc())
-                )
-                yield "\n".join(infos)
-    except:
-        infos.append(traceback.format_exc())
-        yield "\n".join(infos)
-    finally:
-        try:
-            if model_name == "onnx_dereverb_By_FoxJoy":
-                del pre_fun.pred.model
-                del pre_fun.pred.model_
-            else:
-                del pre_fun.model
-                del pre_fun
-        except:
-            traceback.print_exc()
-        print("clean_empty_cache")
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    yield "\n".join(infos)
-
 
 # 一个选项卡全局只能有一个音色
 def get_vc(sid):
@@ -867,8 +741,7 @@ def click_train(
     if_save_every_weights18,
     version19,
 ):
-    cursor.execute("DELETE FROM stop_train")	
-    conn.commit()
+    CSVutil('csvdb/stop.csv', 'w+', 'formanting', False)
     # 生成filelist
     exp_dir = "%s/logs/%s" % (now_dir, exp_dir1)
     os.makedirs(exp_dir, exist_ok=True)
@@ -960,9 +833,9 @@ def click_train(
                 save_epoch10,
                 ("-pg %s" % pretrained_G14) if pretrained_G14 != "" else "",
                 ("-pd %s" % pretrained_D15) if pretrained_D15 != "" else "",
-                1 if if_save_latest13 == i18n("是") else 0,
-                1 if if_cache_gpu17 == i18n("是") else 0,
-                1 if if_save_every_weights18 == i18n("是") else 0,
+                1 if if_save_latest13 == True else 0,
+                1 if if_cache_gpu17 == True else 0,
+                1 if if_save_every_weights18 == True else 0,
                 version19,
                 log_interval,
             )
@@ -980,17 +853,19 @@ def click_train(
                 save_epoch10,
                 ("-pg %s" % pretrained_G14) if pretrained_G14 != "" else "\b",
                 ("-pd %s" % pretrained_D15) if pretrained_D15 != "" else "\b",
-                1 if if_save_latest13 == i18n("是") else 0,
-                1 if if_cache_gpu17 == i18n("是") else 0,
-                1 if if_save_every_weights18 == i18n("是") else 0,
+                1 if if_save_latest13 == True else 0,
+                1 if if_cache_gpu17 == True else 0,
+                1 if if_save_every_weights18 == True else 0,
                 version19,
                 log_interval,
             )
         )
     print(cmd)
     p = Popen(cmd, shell=True, cwd=now_dir)
+    global PID
+    PID = p.pid
     p.wait()
-    return "训练结束, 您可查看控制台训练日志或实验文件夹下的train.log"
+    return ("训练结束, 您可查看控制台训练日志或实验文件夹下的train.log", {"visible": False, "__type__": "update"}, {"visible": True, "__type__": "update"})
 
 
 # but4.click(train_index, [exp_dir1], info3)
@@ -1220,9 +1095,9 @@ def train1key(
                 save_epoch10,
                 ("-pg %s" % pretrained_G14) if pretrained_G14 != "" else "",
                 ("-pd %s" % pretrained_D15) if pretrained_D15 != "" else "",
-                1 if if_save_latest13 == i18n("是") else 0,
-                1 if if_cache_gpu17 == i18n("是") else 0,
-                1 if if_save_every_weights18 == i18n("是") else 0,
+                1 if if_save_latest13 == True else 0,
+                1 if if_cache_gpu17 == True else 0,
+                1 if if_save_every_weights18 == True else 0,
                 version19,
             )
         )
@@ -1239,9 +1114,9 @@ def train1key(
                 save_epoch10,
                 ("-pg %s" % pretrained_G14) if pretrained_G14 != "" else "",
                 ("-pd %s" % pretrained_D15) if pretrained_D15 != "" else "",
-                1 if if_save_latest13 == i18n("是") else 0,
-                1 if if_cache_gpu17 == i18n("是") else 0,
-                1 if if_save_every_weights18 == i18n("是") else 0,
+                1 if if_save_latest13 == True else 0,
+                1 if if_cache_gpu17 == True else 0,
+                1 if if_save_every_weights18 == True else 0,
                 version19,
             )
         )
@@ -1289,9 +1164,10 @@ def train1key(
         % (n_ivf, index_ivf.nprobe, exp_dir1, version19)
     )
     yield get_info_str(i18n("全流程结束！"))
-    		
-def whethercrepeornah(radio):	
-    mango = True if radio == 'mangio-crepe' or radio == 'mangio-crepe-tiny' else False	
+
+
+def whethercrepeornah(radio):
+    mango = True if radio == 'mangio-crepe' or radio == 'mangio-crepe-tiny' else False
     return ({"visible": mango, "__type__": "update"})
 
 #                    ckpt_path2.change(change_info_,[ckpt_path2],[sr__,if_f0__])
@@ -1366,305 +1242,6 @@ def export_onnx(ModelPath, ExportedPath, MoeVS=True):
     )
     return "Finished"
 
-
-#region Mangio-RVC-Fork CLI App
-import re as regex
-import scipy.io.wavfile as wavfile
-
-cli_current_page = "HOME"
-
-def cli_split_command(com):
-    exp = r'(?:(?<=\s)|^)"(.*?)"(?=\s|$)|(\S+)'
-    split_array = regex.findall(exp, com)
-    split_array = [group[0] if group[0] else group[1] for group in split_array]
-    return split_array
-
-def execute_generator_function(genObject):
-    for _ in genObject: pass
-
-def cli_infer(com):
-    # get VC first
-    com = cli_split_command(com)
-    model_name = com[0]
-    source_audio_path = com[1]
-    output_file_name = com[2]
-    feature_index_path = com[3]
-    f0_file = None # Not Implemented Yet
-
-    # Get parameters for inference
-    speaker_id = int(com[4])
-    transposition = float(com[5])
-    f0_method = com[6]
-    crepe_hop_length = int(com[7])
-    harvest_median_filter = int(com[8])
-    resample = int(com[9])
-    mix = float(com[10])
-    feature_ratio = float(com[11])
-    protection_amnt = float(com[12])
-
-    print("Mangio-RVC-Fork Infer-CLI: Starting the inference...")
-    vc_data = get_vc(model_name)
-    print(vc_data)
-    print("Mangio-RVC-Fork Infer-CLI: Performing inference...")
-    conversion_data = vc_single(
-        speaker_id,
-        source_audio_path,
-        transposition,
-        f0_file,
-        f0_method,
-        feature_index_path,
-        #feature_index_path,
-        feature_ratio,
-        harvest_median_filter,
-        resample,
-        mix,
-        protection_amnt,
-        crepe_hop_length,        
-    )
-    if "Success." in conversion_data[0]:
-        print("Mangio-RVC-Fork Infer-CLI: Inference succeeded. Writing to %s/%s..." % ('audio-outputs', output_file_name))
-        wavfile.write('%s/%s' % ('audio-outputs', output_file_name), conversion_data[1][0], conversion_data[1][1])
-        print("Mangio-RVC-Fork Infer-CLI: Finished! Saved output to %s/%s" % ('audio-outputs', output_file_name))
-    else:
-        print("Mangio-RVC-Fork Infer-CLI: Inference failed. Here's the traceback: ")
-        print(conversion_data[0])
-
-def cli_pre_process(com):
-    com = cli_split_command(com)
-    model_name = com[0]
-    trainset_directory = com[1]
-    sample_rate = com[2]
-    num_processes = int(com[3])
-
-    print("Mangio-RVC-Fork Pre-process: Starting...")
-    generator = preprocess_dataset(
-        trainset_directory, 
-        model_name, 
-        sample_rate, 
-        num_processes
-    )
-    execute_generator_function(generator)
-    print("Mangio-RVC-Fork Pre-process: Finished")
-
-def cli_extract_feature(com):
-    com = cli_split_command(com)
-    model_name = com[0]
-    gpus = com[1]
-    num_processes = int(com[2])
-    has_pitch_guidance = True if (int(com[3]) == 1) else False
-    f0_method = com[4]
-    crepe_hop_length = int(com[5])
-    version = com[6] # v1 or v2
-    
-    print("Mangio-RVC-CLI: Extract Feature Has Pitch: " + str(has_pitch_guidance))
-    print("Mangio-RVC-CLI: Extract Feature Version: " + str(version))
-    print("Mangio-RVC-Fork Feature Extraction: Starting...")
-    generator = extract_f0_feature(
-        gpus, 
-        num_processes, 
-        f0_method, 
-        has_pitch_guidance, 
-        model_name, 
-        version, 
-        crepe_hop_length
-    )
-    execute_generator_function(generator)
-    print("Mangio-RVC-Fork Feature Extraction: Finished")
-
-def cli_train(com):
-    com = cli_split_command(com)
-    model_name = com[0]
-    sample_rate = com[1]
-    has_pitch_guidance = True if (int(com[2]) == 1) else False
-    speaker_id = int(com[3])
-    save_epoch_iteration = int(com[4])
-    total_epoch = int(com[5]) # 10000
-    batch_size = int(com[6])
-    gpu_card_slot_numbers = com[7]
-    if_save_latest = i18n("是") if (int(com[8]) == 1) else i18n("否")
-    if_cache_gpu = i18n("是") if (int(com[9]) == 1) else i18n("否")
-    if_save_every_weight = i18n("是") if (int(com[10]) == 1) else i18n("否")
-    version = com[11]
-
-    pretrained_base = "pretrained/" if version == "v1" else "pretrained_v2/" 
-    
-    g_pretrained_path = "%sf0G%s.pth" % (pretrained_base, sample_rate)
-    d_pretrained_path = "%sf0D%s.pth" % (pretrained_base, sample_rate)
-
-    print("Mangio-RVC-Fork Train-CLI: Training...")
-    click_train(
-        model_name,
-        sample_rate,
-        has_pitch_guidance,
-        speaker_id,
-        save_epoch_iteration,
-        total_epoch,
-        batch_size,
-        if_save_latest,
-        g_pretrained_path,
-        d_pretrained_path,
-        gpu_card_slot_numbers,
-        if_cache_gpu,
-        if_save_every_weight,
-        version
-    )
-
-def cli_train_feature(com):
-    com = cli_split_command(com)
-    model_name = com[0]
-    version = com[1]
-    print("Mangio-RVC-Fork Train Feature Index-CLI: Training... Please wait")
-    generator = train_index(
-        model_name,
-        version
-    )
-    execute_generator_function(generator)
-    print("Mangio-RVC-Fork Train Feature Index-CLI: Done!")
-
-def cli_extract_model(com):
-    com = cli_split_command(com)
-    model_path = com[0]
-    save_name = com[1]
-    sample_rate = com[2]
-    has_pitch_guidance = com[3]
-    info = com[4]
-    version = com[5]
-    extract_small_model_process = extract_small_model(
-        model_path,
-        save_name,
-        sample_rate,
-        has_pitch_guidance,
-        info,
-        version
-    )
-    if extract_small_model_process == "Success.":
-        print("Mangio-RVC-Fork Extract Small Model: Success!")
-    else:
-        print(str(extract_small_model_process))        
-        print("Mangio-RVC-Fork Extract Small Model: Failed!")
-
-def print_page_details():
-    if cli_current_page == "HOME":
-        print("    go home            : Takes you back to home with a navigation list.")
-        print("    go infer           : Takes you to inference command execution.\n")
-        print("    go pre-process     : Takes you to training step.1) pre-process command execution.")
-        print("    go extract-feature : Takes you to training step.2) extract-feature command execution.")
-        print("    go train           : Takes you to training step.3) being or continue training command execution.")
-        print("    go train-feature   : Takes you to the train feature index command execution.\n")
-        print("    go extract-model   : Takes you to the extract small model command execution.")
-    elif cli_current_page == "INFER":
-        print("    arg 1) model name with .pth in ./weights: mi-test.pth")
-        print("    arg 2) source audio path: myFolder\\MySource.wav")
-        print("    arg 3) output file name to be placed in './audio-outputs': MyTest.wav")
-        print("    arg 4) feature index file path: logs/mi-test/added_IVF3042_Flat_nprobe_1.index")
-        print("    arg 5) speaker id: 0")
-        print("    arg 6) transposition: 0")
-        print("    arg 7) f0 method: harvest (pm, harvest, crepe, crepe-tiny, hybrid[x,x,x,x], mangio-crepe, mangio-crepe-tiny)")
-        print("    arg 8) crepe hop length: 160")
-        print("    arg 9) harvest median filter radius: 3 (0-7)")
-        print("    arg 10) post resample rate: 0")
-        print("    arg 11) mix volume envelope: 1")
-        print("    arg 12) feature index ratio: 0.78 (0-1)")
-        print("    arg 13) Voiceless Consonant Protection (Less Artifact): 0.33 (Smaller number = more protection. 0.50 means Dont Use.) \n")
-        print("Example: mi-test.pth saudio/Sidney.wav myTest.wav logs/mi-test/added_index.index 0 -2 harvest 160 3 0 1 0.95 0.33")
-    elif cli_current_page == "PRE-PROCESS":
-        print("    arg 1) Model folder name in ./logs: mi-test")
-        print("    arg 2) Trainset directory: mydataset (or) E:\\my-data-set")
-        print("    arg 3) Sample rate: 40k (32k, 40k, 48k)")
-        print("    arg 4) Number of CPU threads to use: 8 \n")
-        print("Example: mi-test mydataset 40k 24")
-    elif cli_current_page == "EXTRACT-FEATURE":
-        print("    arg 1) Model folder name in ./logs: mi-test")
-        print("    arg 2) Gpu card slot: 0 (0-1-2 if using 3 GPUs)")
-        print("    arg 3) Number of CPU threads to use: 8")
-        print("    arg 4) Has Pitch Guidance?: 1 (0 for no, 1 for yes)")
-        print("    arg 5) f0 Method: harvest (pm, harvest, dio, crepe)")
-        print("    arg 6) Crepe hop length: 128")
-        print("    arg 7) Version for pre-trained models: v2 (use either v1 or v2)\n")
-        print("Example: mi-test 0 24 1 harvest 128 v2")
-    elif cli_current_page == "TRAIN":
-        print("    arg 1) Model folder name in ./logs: mi-test")
-        print("    arg 2) Sample rate: 40k (32k, 40k, 48k)")
-        print("    arg 3) Has Pitch Guidance?: 1 (0 for no, 1 for yes)")
-        print("    arg 4) speaker id: 0")
-        print("    arg 5) Save epoch iteration: 50")
-        print("    arg 6) Total epochs: 10000")
-        print("    arg 7) Batch size: 8")
-        print("    arg 8) Gpu card slot: 0 (0-1-2 if using 3 GPUs)")
-        print("    arg 9) Save only the latest checkpoint: 0 (0 for no, 1 for yes)")
-        print("    arg 10) Whether to cache training set to vram: 0 (0 for no, 1 for yes)")
-        print("    arg 11) Save extracted small model every generation?: 0 (0 for no, 1 for yes)")
-        print("    arg 12) Model architecture version: v2 (use either v1 or v2)\n")
-        print("Example: mi-test 40k 1 0 50 10000 8 0 0 0 0 v2")
-    elif cli_current_page == "TRAIN-FEATURE":
-        print("    arg 1) Model folder name in ./logs: mi-test")
-        print("    arg 2) Model architecture version: v2 (use either v1 or v2)\n")
-        print("Example: mi-test v2")
-    elif cli_current_page == "EXTRACT-MODEL":
-        print("    arg 1) Model Path: logs/mi-test/G_168000.pth")
-        print("    arg 2) Model save name: MyModel")
-        print("    arg 3) Sample rate: 40k (32k, 40k, 48k)")
-        print("    arg 4) Has Pitch Guidance?: 1 (0 for no, 1 for yes)")
-        print('    arg 5) Model information: "My Model"')
-        print("    arg 6) Model architecture version: v2 (use either v1 or v2)\n")
-        print('Example: logs/mi-test/G_168000.pth MyModel 40k 1 "Created by Cole Mangio" v2')
-    print("")
-
-def change_page(page):
-    global cli_current_page
-    cli_current_page = page
-    return 0
-
-def execute_command(com):
-    if com == "go home":
-        return change_page("HOME")
-    elif com == "go infer":
-        return change_page("INFER")
-    elif com == "go pre-process":
-        return change_page("PRE-PROCESS")
-    elif com == "go extract-feature":
-        return change_page("EXTRACT-FEATURE")
-    elif com == "go train":
-        return change_page("TRAIN")
-    elif com == "go train-feature":
-        return change_page("TRAIN-FEATURE")
-    elif com == "go extract-model":
-        return change_page("EXTRACT-MODEL")
-    else:
-        if com[:3] == "go ":
-            print("page '%s' does not exist!" % com[3:])
-            return 0
-    
-    if cli_current_page == "INFER":
-        cli_infer(com)
-    elif cli_current_page == "PRE-PROCESS":
-        cli_pre_process(com)
-    elif cli_current_page == "EXTRACT-FEATURE":
-        cli_extract_feature(com)
-    elif cli_current_page == "TRAIN":
-        cli_train(com)
-    elif cli_current_page == "TRAIN-FEATURE":
-        cli_train_feature(com)
-    elif cli_current_page == "EXTRACT-MODEL":
-        cli_extract_model(com)
-
-def cli_navigation_loop():
-    while True:
-        print("You are currently in '%s':" % cli_current_page)
-        print_page_details()
-        command = input("%s: " % cli_current_page)
-        try:
-            execute_command(command)
-        except:
-            print(traceback.format_exc())
-
-if(config.is_cli):
-    print("\n\nMangio-RVC-Fork v2 CLI App!\n")
-    print("Welcome to the CLI version of RVC. Please read the documentation on https://github.com/Mangio621/Mangio-RVC-Fork (README.MD) to understand how to use this app.\n")
-    cli_navigation_loop()
-
-#endregion
-
 #region RVC WebUI App
 
 def get_presets():
@@ -1680,14 +1257,14 @@ def get_presets():
 def change_choices2():
     audio_files=[]
     for filename in os.listdir("./audios"):
-        if filename.endswith(('.wav','.mp3')):
-            audio_files.append(os.path.join('./audios',filename))
+        if filename.endswith(('.wav','.mp3','.ogg','.flac','.m4a','.aac','.mp4')):
+            audio_files.append(os.path.join('./audios',filename).replace('\\', '/'))
     return {"choices": sorted(audio_files), "__type__": "update"}, {"__type__": "update"}
     
 audio_files=[]
 for filename in os.listdir("./audios"):
-    if filename.endswith(('.wav','.mp3')):
-        audio_files.append(os.path.join('./audios',filename))
+    if filename.endswith(('.wav','.mp3','.ogg','.flac','.m4a','.aac','.mp4')):
+        audio_files.append(os.path.join('./audios',filename).replace('\\', '/'))
         
 def get_index():
     if check_for_name() != '':
@@ -1819,25 +1396,20 @@ def mouth(size, face, voice, faces):
 eleven_voices = ['Adam','Antoni','Josh','Arnold','Sam','Bella','Rachel','Domi','Elli']
 eleven_voices_ids=['pNInz6obpgDQGcFmaJgB','ErXwobaYiN019PkySvjV','TxGEqnHWrfWFTfGW9XjX','VR6AewLTigWG4xSOukaG','yoZ06aMxZJJ28mfd3POQ','EXAVITQu4vr4xnSDxMaL','21m00Tcm4TlvDq8ikWAM','AZnzlk1XvdvUeBnXmlld','MF3mGyEYCl7XYWbV9V6O']
 chosen_voice = dict(zip(eleven_voices, eleven_voices_ids))
-def stoptraining(mim): 	
-    if int(mim) == 1:	
-        	
-        cursor.execute("INSERT INTO stop_train (stop) VALUES (?)", (True,))	
-        conn.commit()	
-        #p.terminate()	
-        #p.kill()	
-        try:	
-            os.kill(PID, signal.SIGTERM)	
-        except Exception as e:	
-            print(f"Couldn't click due to {e}")	
-            pass	
-    else:	
-        pass	
-    	
-    return (	
-        {"visible": False, "__type__": "update"}, 	
-        {"visible": True, "__type__": "update"},	
+
+def stoptraining(mim): 
+    if int(mim) == 1:
+        try:
+            CSVutil('csvdb/stop.csv', 'w+', 'stop', 'True')
+            os.kill(PID, signal.SIGTERM)
+        except Exception as e:
+            print(f"Couldn't click due to {e}")
+    return (
+        {"visible": False, "__type__": "update"}, 
+        {"visible": True, "__type__": "update"},
     )
+
+
 def elevenTTS(xiapi, text, id, lang):
     if xiapi!= '' and id !='': 
         choice = chosen_voice[id]
@@ -1905,7 +1477,7 @@ def zip_downloader(model):
     else:
         return f'./weights/{model}.pth', "Could not find Index file."
 
-with gr.Blocks(theme=gr.themes.Base()) as app:
+with gr.Blocks(theme=gr.themes.Base(), title='Mangio-RVC-Web 💻') as app:
     with gr.Tabs():
         with gr.TabItem("Inference"):
             gr.HTML(i18n("<h1> Easy GUI v2 (rejekts) - adapted to Mangio-RVC-Fork 💻 </h1>"))
@@ -2007,7 +1579,11 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             value=0.66,
                             interactive=True,
                             )
-                    vc_output2 = gr.Audio(label=i18n("Output Audio (Click on the Three Dots in the Right Corner to Download)"),type='filepath')
+                    vc_output2 = gr.Audio(
+                        label=i18n("Output Audio (Click on the Three Dots in the Right Corner to Download)"),
+                        type='filepath',
+                        interactive=False,
+                    )
                     animate_button.click(fn=mouth, inputs=[size, face, vc_output2, faces], outputs=[animation, preview])
                     with gr.Accordion(i18n("Advanced Settings"), open=False):
                         f0method0 = gr.Radio(
@@ -2024,6 +1600,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             value=120,
                             interactive=True
                             )
+                        f0method0.change(fn=whethercrepeornah, inputs=[f0method0], outputs=[crepe_hop_length])
                         filter_radius0 = gr.Slider(
                             minimum=0,
                             maximum=7,
@@ -2075,29 +1652,27 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             visible=bool(DoFormant),
                             variant='primary',
                         )
-
-                        #formant_refresh_button = ToolButton( elem_id='1')
-                        #create_refresh_button(formant_preset, lambda: {"choices": formant_preset}, "refresh_list_shiftpresets")
-                        formant_refresh_button = gr.Button(value='\U0001f504', visible=False,variant='primary')
                         #formant_refresh_button = ToolButton( elem_id='1')
                         #create_refresh_button(formant_preset, lambda: {"choices": formant_preset}, "refresh_list_shiftpresets")
                         
                         qfrency = gr.Slider(
                                 value=Quefrency,
+                                info="Default value is 1.0",
                                 label=i18n("Quefrency for formant shifting"),
-                                minimum=-16.0,
+                                minimum=0.0,
                                 maximum=16.0,
                                 step=0.1,
-                                visible=False,
+                                visible=bool(DoFormant),
                                 interactive=True,
                             )
                         tmbre = gr.Slider(
                             value=Timbre,
+                            info="Default value is 1.0",
                             label=i18n("Timbre for formant shifting"),
-                            minimum=-16.0,
+                            minimum=0.0,
                             maximum=16.0,
                             step=0.1,
-                            visible=False,
+                            visible=bool(DoFormant),
                             interactive=True,
                         )
                         
@@ -2131,7 +1706,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                     [vc_output1, vc_output2],
                 )
                         
-            with gr.Accordion(i18n("Batch Conversion"),open=False):
+            with gr.Accordion("Batch Conversion",open=False):
                 with gr.Row():
                     with gr.Column():
                         vc_transform1 = gr.Number(
@@ -2248,10 +1823,6 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                         [vc_output3],
                     )
                     but1.click(fn=lambda: easy_uploader.clear())
-            with gr.Row():
-                gr.Markdown(
-                    i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
-                )
         with gr.TabItem(i18n("Download Model")):
             with gr.Row():
                 url=gr.Textbox(label=i18n("Enter the URL to the Model:"))
@@ -2265,6 +1836,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                 gr.Markdown(
                 i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
                 )
+
         def has_two_files_in_pretrained_folder():
             pretrained_folder = "./pretrained/"
             if not os.path.exists(pretrained_folder):
@@ -2344,14 +1916,17 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             value="rmvpe",
                             interactive=True,
                         )
+                        
                         extraction_crepe_hop_length = gr.Slider(
                             minimum=1,
                             maximum=512,
                             step=1,
                             label=i18n("crepe_hop_length"),
                             value=128,
-                            interactive=True
+                            interactive=True,
+                            visible=False,
                         )
+                        f0method8.change(fn=whethercrepeornah, inputs=[f0method8], outputs=[extraction_crepe_hop_length])
                         but2 = gr.Button(i18n("2.Pitch Extraction"), variant="primary")
                         info2 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=8)
                         but2.click(
@@ -2362,7 +1937,7 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                     with gr.Row():      
                         with gr.Column():
                             total_epoch11 = gr.Slider(
-                                minimum=0,
+                                minimum=1,
                                 maximum=10000,
                                 step=10,
                                 label=i18n("Total # of training epochs (IF you choose a value too high, your model will sound horribly overtrained.):"),
@@ -2379,17 +1954,18 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             but3.click(fn=stoptraining, inputs=[gr.Number(value=0, visible=False)], outputs=[but3, butstop])
                             butstop.click(fn=stoptraining, inputs=[gr.Number(value=1, visible=False)], outputs=[butstop, but3])
                             
-                            but4 = gr.Button(i18n("4.Train Index"), variant="primary")
-                            info3 = gr.Textbox(label=i18n("Status(Check the Colab Notebook's cell output):"), value="", max_lines=10)
-                            with gr.Accordion(i18n("Training Preferences (You can leave these as they are)"), open=False):
+                            
+                            but4 = gr.Button("4.Train Index", variant="primary")
+                            info3 = gr.Textbox(label="Status(Check the Colab Notebook's cell output):", value="", max_lines=10)
+                            with gr.Accordion("Training Preferences (You can leave these as they are)", open=False):
                                 #gr.Markdown(value=i18n("step3: 填写训练设置, 开始训练模型和索引"))
                                 with gr.Column():
                                     save_epoch10 = gr.Slider(
-                                        minimum=0,
+                                        minimum=1,
                                         maximum=200,
-                                        step=5,
+                                        step=1,
                                         label=i18n("Backup every # of epochs:"),
-                                        value=25,
+                                        value=10,
                                         interactive=True,
                                     )
                                     batch_size12 = gr.Slider(
@@ -2400,63 +1976,25 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                                         value=20,
                                         interactive=True,
                                     )
-                                    if_save_latest13 = gr.Radio(
+                                    if_save_latest13 = gr.Checkbox(
                                         label=i18n("是否仅保存最新的ckpt文件以节省硬盘空间"),
-                                        choices=[i18n("是"), i18n("否")],
-                                        value=i18n("是"),
+                                        value=True,
                                         interactive=True,
                                     )
-                                    if_cache_gpu17 = gr.Radio(
+                                    if_cache_gpu17 = gr.Checkbox(
                                         label=i18n(
                                             "是否缓存所有训练集至显存. 10min以下小数据可缓存以加速训练, 大数据缓存会炸显存也加不了多少速"
                                         ),
-                                        choices=[i18n("是"), i18n("否")],
-                                        value=i18n("否"),
+                                        value=False,
                                         interactive=True,
                                     )
-                                    if_save_every_weights18 = gr.Radio(
+                                    if_save_every_weights18 = gr.Checkbox(
                                         label=i18n("是否在每次保存时间点将最终小模型保存至weights文件夹"),
-                                        choices=[i18n("是"), i18n("否")],
-                                        value=i18n("是"),
+                                        value=True,
                                         interactive=True,
                                     )
-                            with gr.Accordion(i18n("Calculadora de tempo"), open=False):
-                                with gr.Blocks() as demo:
-                                    num_epochs_inicio_entry = gr.Number(label=i18n("Numero de epochs inicial:"), minimum=0, maximum=10000)
-                                    num_epochs_fim_entry = gr.Number(label=i18n("Numero de epochs final:"), minimum=0, maximum=10000)
-                                    tempo_epoch_entry = gr.Number(label=i18n("Tempo médio por epoch (segundos):"))
-                                    with gr.Row():
-                                        submit_btn = gr.Button(i18n("Calcular"))
-                                    diagnosis_box1 = gr.Textbox(label=i18n("Resultado"))
-    
-                                    def calcular(num1, num2, num3):
-                                        segundos_total = (num2 - num1) * num3
-                                        minutos = int((segundos_total % 3600) // 60)  # 1 minuto = 60 segundos
-                                        horas = int(segundos_total // 3600)  # 1 hora = 3600 segundos
-                                        segundos = int(segundos_total % 60)
-                                        return {
-                                            diagnosis_box1: i18n(f"{horas}:{minutos}\n\nVai levar {horas} hr(s): {minutos} minuto(s): {segundos} e segundos(s) aproximadamente"),
-                                            }
-                                    # tempo_total = (num_epochs_fim - num_epochs_inicio) * tempo_medio_por_epoch
-                                    submit_btn.click(calcular, inputs=[num_epochs_inicio_entry, num_epochs_fim_entry, tempo_epoch_entry], outputs=diagnosis_box1)
-                                                    # "Tempo total estimado: {tempo_total:.2f} segundos"
-                                with gr.Accordion(i18n("Minutos para segundos"), open=False):
-                                    with gr.Blocks() as demo:
-                                        num_epochs_inicio_entry = gr.Number(label=i18n("Minutos"))
-                                        with gr.Row():
-                                            submit_btn = gr.Button(i18n("Calcular"))
-                                        diagnosis_box2 = gr.Textbox(label=i18n("Resultado"))
-    
-                                        def calcularsec(minutos):
-                                             mintosec = int(minutos * 60)
-                                             return {
-                                                 diagnosis_box2: i18n(f"{mintosec} segundos."),
-                                                 }
-                                        # tempo_total = (num_epochs_fim - num_epochs_inicio) * tempo_medio_por_epoch
-                                        submit_btn.click(calcularsec, inputs=[num_epochs_inicio_entry], outputs=diagnosis_box2)
-                                                        # "Tempo total estimado: {tempo_total:.2f} segundos"                       
-                            zip_model = gr.Button(i18n('5.Download Model'))
-                            zipped_model = gr.Files(label=i18n('Your Model and Index file can be downloaded here:'))
+                            zip_model = gr.Button('5. Download Model')
+                            zipped_model = gr.Files(label='Your Model and Index file can be downloaded here:')
                             zip_model.click(fn=zip_downloader, inputs=[exp_dir1], outputs=[zipped_model, info3])
                 with gr.Group():
                     with gr.Accordion(i18n("Base Model Locations:"), open=False, visible=False):
@@ -2508,11 +2046,11 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                             if_cache_gpu17,
                             if_save_every_weights18,
                             version19,
-	                    ],
-                        [	
-                            info3,	
-                            butstop,	
-                            but3,	
+                        ],
+                        [
+                            info3,
+                            butstop,
+                            but3,
                         ],
                     )
                     but4.click(train_index, [exp_dir1, version19], info3)
@@ -2541,148 +2079,12 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
                         info3,
                     )
 
-
-                try:
-                    if tab_faq == "常见问题解答":
-                        with open("docs/faq.md", "r", encoding="utf8") as f:
-                            info = f.read()
-                    else:
-                        with open("docs/faq_en.md", "r", encoding="utf8") as f:
-                            info = f.read()
-                    gr.Markdown(value=info)
-                except:
-                    gr.Markdown(
-                i18n("Original RVC:https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI    Mangio's RVC Fork:https://github.com/Mangio621/Mangio-RVC-Fork    ❤️ If you like the EasyGUI, help me keep it.❤️    https://paypal.me/lesantillan    ")
-                    )
         else:
-            print("Pretrained weights not downloaded. Disabling training tab.")
-            print("Wondering how to train a voice? Visit here for the RVC model training guide: https://t.ly/RVC_Training_Guide")
-            print("-------------------------------\n")
-        
-        tab_faq = i18n("常见问题解答")
-        with gr.TabItem(tab_faq):
-            try:
-                if tab_faq == "常见问题解答":
-                    with open("docs/faq.md", "r", encoding="utf8") as f:
-                        info = f.read()
-                else:
-                    with open("docs/faq_pt_BR.md", "r", encoding="utf8") as f:
-                        info = f.read()
-                gr.Markdown(value=info)
-            except:
-                gr.Markdown(traceback.format_exc())
-
-    #region Mangio Preset Handler Region
-    def save_preset(preset_name,sid0,vc_transform,input_audio,f0method,crepe_hop_length,filter_radius,file_index1,file_index2,index_rate,resample_sr,rms_mix_rate,protect,f0_file):
-        data = None
-        with open('../inference-presets.json', 'r') as file:
-            data = json.load(file)
-        preset_json = {
-            'name': preset_name,
-            'model': sid0,
-            'transpose': vc_transform,
-            'audio_file': input_audio,
-            'f0_method': f0method,
-            'crepe_hop_length': crepe_hop_length,
-            'median_filtering': filter_radius,
-            'feature_path': file_index1,
-            'auto_feature_path': file_index2,
-            'search_feature_ratio': index_rate,
-            'resample': resample_sr,
-            'volume_envelope': rms_mix_rate,
-            'protect_voiceless': protect,
-            'f0_file_path': f0_file
-        }
-        data['presets'].append(preset_json)
-        with open('../inference-presets.json', 'w') as file:
-            json.dump(data, file)
-            file.flush()
-        print(i18n("Saved Preset %s into inference-presets.json!") % preset_name)
-
-
-    def on_preset_changed(preset_name):
-        print(i18n("Changed Preset to %s!") % preset_name)
-        data = None
-        with open('../inference-presets.json', 'r') as file:
-            data = json.load(file)
-
-        print(i18n("Searching for ") + preset_name)
-        returning_preset = None
-        for preset in data['presets']:
-            if(preset['name'] == preset_name):
-                print(i18n("Found a preset"))
-                returning_preset = preset
-        # return all new input values
-        return (
-            # returning_preset['model'],
-            # returning_preset['transpose'],
-            # returning_preset['audio_file'],
-            # returning_preset['f0_method'],
-            # returning_preset['crepe_hop_length'],
-            # returning_preset['median_filtering'],
-            # returning_preset['feature_path'],
-            # returning_preset['auto_feature_path'],
-            # returning_preset['search_feature_ratio'],
-            # returning_preset['resample'],
-            # returning_preset['volume_envelope'],
-            # returning_preset['protect_voiceless'],
-            # returning_preset['f0_file_path']
-        )
-
-    # Preset State Changes                
-    
-    # This click calls save_preset that saves the preset into inference-presets.json with the preset name
-    # mangio_preset_save_btn.click(
-    #     fn=save_preset, 
-    #     inputs=[
-    #         mangio_preset_name_save,
-    #         sid0,
-    #         vc_transform0,
-    #         input_audio0,
-    #         f0method0,
-    #         crepe_hop_length,
-    #         filter_radius0,
-    #         file_index1,
-    #         file_index2,
-    #         index_rate1,
-    #         resample_sr0,
-    #         rms_mix_rate0,
-    #         protect0,
-    #         f0_file
-    #     ], 
-    #     outputs=[]
-    # )
-
-    # mangio_preset.change(
-    #     on_preset_changed, 
-    #     inputs=[
-    #         # Pass inputs here
-    #         mangio_preset
-    #     ], 
-    #     outputs=[
-    #         # Pass Outputs here. These refer to the gradio elements that we want to directly change
-    #         # sid0,
-    #         # vc_transform0,
-    #         # input_audio0,
-    #         # f0method0,
-    #         # crepe_hop_length,
-    #         # filter_radius0,
-    #         # file_index1,
-    #         # file_index2,
-    #         # index_rate1,
-    #         # resample_sr0,
-    #         # rms_mix_rate0,
-    #         # protect0,
-    #         # f0_file
-    #     ]
-    # )
-
-
-        # with gr.TabItem(i18n("招募音高曲线前端编辑器")):
-        #     gr.Markdown(value=i18n("加开发群联系我xxxxx"))
-        # with gr.TabItem(i18n("点击查看交流、问题反馈群号")):
-        #     gr.Markdown(value=i18n("xxxxx"))
-
+            print(
+                "Pretrained weights not downloaded. Disabling training tab.\n"
+                "Wondering how to train a voice? Visit here for the RVC model training guide: https://t.ly/RVC_Training_Guide\n"
+                "-------------------------------\n"
+            )
                 
     if config.iscolab or config.paperspace: # Share gradio link for colab and paperspace (FORK FEATURE)
         app.queue(concurrency_count=511, max_size=1022).launch(share=True, quiet=True)
@@ -2693,3 +2095,4 @@ with gr.Blocks(theme=gr.themes.Base()) as app:
             server_port=config.listen_port,
             quiet=True,
         )
+#endregion
